@@ -74,7 +74,7 @@ function computeDivisionRows(districtRows, headers, nameColIdx) {
 function downloadCSV(headers, rows, filename) {
   const esc = v => `"${String(v).replace(/"/g, '""')}"`;
   const lines = [headers.map(esc).join(','), ...rows.map(r => r.cells.map(esc).join(','))];
-  const blob = new Blob(['\uFEFF' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8;' });
+  const blob = new Blob([lines.join('\r\n')], { type: 'text/csv;charset=utf-8;' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = filename;
@@ -101,8 +101,8 @@ function parseSheetData(sheetRows) {
 
   // Step 2: Detect two-level headers (section header row + sub-header row).
   // Pattern: sub-header row has text in columns where the section row is empty (merged cells).
-  // e.g. Row1: ["", "District", "ADVANCEMENT (IN Cr.)", "", "", "RECOVERY...", "", "", "PERCENTAGE", "", ""]
-  //      Row2: ["", "", "Overdue", "Fresh", "Total", "Overdue", "Fresh", "Total", "Overdue", "Fresh", "Total"]
+  // e.g. Row1: ["","District","ADVANCEMENT (IN Cr.)","","","RECOVERY...","","","PERCENTAGE","",""]
+  //      Row2: ["","","Overdue","Fresh","Total","Overdue","Fresh","Total","Overdue","Fresh","Total"]
   // → combine into: "advancement (in cr.) overdue", "advancement (in cr.) fresh", etc.
   const subRow = sheetRows[headerRowIdx + 1];
   if (subRow) {
@@ -128,7 +128,7 @@ function parseSheetData(sheetRows) {
 
   // Step 3: Find the district name column.
   let nameIdx = hdrsLower.findIndex(h => /district/i.test(h));
-  if (nameIdx < 0) nameIdx = hdrsLower.findIndex(h => ['name', 'block', 'zila', 'location'].includes(h));
+  if (nameIdx < 0) nameIdx = hdrsLower.findIndex(h => ['name','block','zila','location'].includes(h));
   // Fallback: first column whose sample data values are predominantly TEXT
   if (nameIdx < 0) {
     const sample = dataRows.slice(0, 5);
@@ -168,7 +168,7 @@ function parseSheetData(sheetRows) {
       if (/^(sno|sr\.?\s*no\.?|s\.?\s*no\.?|serial|#)$/i.test(h)) return;
       const n = parseFloat(String(row[j] || '').replace(/[₹,\s%]/g, ''));
       // Store 0 for blank cells — so rows with empty Excel cells (e.g. district hasn't
-      // received approval yet) still show ↔ 0 instead of no arrow at all.
+      // received approval yet) still show • 0 instead of no arrow at all.
       distData[key][h] = isNaN(n) ? 0 : n;
     });
   }
@@ -298,7 +298,7 @@ function formatDiff(abs) {
 
 // Column lookup: exact match first, then suffix/prefix substring with ≥40% length ratio.
 // The ratio guard prevents short generic keys ("no. of pacs", ratio 0.26) from matching
-// long specific names, while still matching section-prefix mismatches like
+// long specific names, while still matching section-prefix mismatches like:
 //   GSheet "access/deficit from last year" (30)
 //   Excel  "percentage access/deficit from last year" (39) → ratio 0.77 ✓
 function fuzzyLookup(map, key) {
@@ -352,7 +352,7 @@ function KPIGrid({ kpis, loading, compareTotals }) {
                 {diff > 0 ? '↑' : '↓'} {formatDiff(Math.abs(diff))}
               </div>
             ) : hasDiff ? (
-              <div className="kpi-card-diff diff-eq">↔ 0</div>
+              <div className="kpi-card-diff diff-eq">• 0</div>
             ) : null}
           </article>
         );
@@ -364,7 +364,7 @@ function KPIGrid({ kpis, loading, compareTotals }) {
 // — Client-side name-column detector (mirrors server findNameColIdx)
 const CLIENT_SNO_RE = /s\.?\s*no\.?$|sr\.?\s*no\.?$|serial\s*(no\.?)?$|^#$/i;
 function clientFindNameColIdx(headers) {
-  const kws = ['district', 'districts', 'name', 'location', 'block', 'zila'];
+  const kws = ['district','districts','name','location','block','zila'];
   for (const kw of kws) {
     const i = headers.findIndex(h => (h || '').trim().toLowerCase() === kw);
     if (i >= 0) return i;
@@ -391,12 +391,10 @@ function clientClassify(rawValue, critBelow, goodAbove) {
 
 function PerformanceCard({
   progressData, progressColumn, loading,
-  perfCfg, setPerfCfg, showCfg, setShowCfg,
-  colOptions, selectedColIdx, onColChange, autoColHeader,
+  perfCfg, isAdmin, onOpenCfg,
 }) {
   if (loading) return null;
-  // Only hide entirely when there's no data AND no columns to pick from
-  if (!progressData?.length && !colOptions?.length) return null;
+  if (!progressData?.length) return null;
 
   const { critBelow, goodAbove } = perfCfg;
 
@@ -418,53 +416,17 @@ function PerformanceCard({
           <span className="pthr pthr-mod">Moderate {critBelow}–{goodAbove}</span>
           <span className="pthr pthr-good">Good &gt;{goodAbove}</span>
         </div>
-        <button className="perf-cfg-btn" onClick={() => setShowCfg(v => !v)}>
-          ⚙ {showCfg ? 'Done' : 'Configure'}
-        </button>
+        {isAdmin && (
+          <button className="perf-cfg-btn" onClick={onOpenCfg}>
+            ⚙ Configure
+          </button>
+        )}
       </div>
-
-      {showCfg && (
-        <div className="perf-cfg-row">
-          {/* Column selector */}
-          <label className="perf-cfg-label">
-            Column
-            <select
-              className="perf-cfg-select"
-              value={selectedColIdx ?? ''}
-              onChange={e => onColChange(e.target.value === '' ? null : +e.target.value)}
-            >
-              <option value="">Auto — {autoColHeader || 'none'}</option>
-              {(colOptions || []).map(o => (
-                <option key={o.idx} value={o.idx}>{o.label}</option>
-              ))}
-            </select>
-          </label>
-
-          <label className="perf-cfg-label">
-            Critical below
-            <input
-              type="number" min={0} max={9999}
-              value={critBelow}
-              onChange={e => setPerfCfg(c => ({ ...c, critBelow: +e.target.value }))}
-              className="perf-cfg-input"
-            />
-          </label>
-          <label className="perf-cfg-label">
-            Good above
-            <input
-              type="number" min={0} max={9999}
-              value={goodAbove}
-              onChange={e => setPerfCfg(c => ({ ...c, goodAbove: +e.target.value }))}
-              className="perf-cfg-input"
-            />
-          </label>
-        </div>
-      )}
 
       <div className="perf-rows">
         {!progressData?.length ? (
-          <p className="perf-empty-message">
-            Select a column above to see district performance breakdown.
+          <p style={{ color: '#a2b5c7', fontSize: 13, margin: '8px 0 4px' }}>
+            No performance data available for this report.
           </p>
         ) : (
           [
@@ -540,7 +502,7 @@ function FilterBar({ viewMode, onViewMode, divFilter, onDivFilter, onCSV, hasDat
                   ))}
                 </select>
               )}
-              <button className="btn" onClick={() => fileRef.current?.click()} disabled={compareLoading}
+              <button className="btn" onClick={() => fileRef.current.click()} disabled={compareLoading}
                 title="Upload a new Excel file for comparison">
                 {compareLoading ? '⟳ Loading…' : '📂 Upload Excel'}
               </button>
@@ -557,7 +519,7 @@ function FilterBar({ viewMode, onViewMode, divFilter, onDivFilter, onCSV, hasDat
           {/* Non-admin: read-only pill showing which file is active */}
           {!isAdmin && compareFiles.length > 0 && (
             <span className="cmp-loaded-label" title={compareFiles.find(f => f.name === activeCompare)?.name || compareFiles[0]?.name}>
-              📊 {activeCompare || compareFiles[0]?.name}
+              📄 {activeCompare || compareFiles[0]?.name}
             </span>
           )}
         </div>
@@ -593,7 +555,8 @@ function progressCls(row, progressColIdx, perfCfg) {
 // — Data table
 const DIVISION_COLORS = { Ferozepur: '#e4a03b', Jalandhar: '#159b9a', Patiala: '#8156d9' };
 
-function DataTable({ headers, rows, loading, viewMode, divFilter, progressColumn, isMasterSheet, compareData, compareDataByDivision, perfCfg }) {
+function DataTable({ headers, rows, loading, viewMode, divFilter, progressColumn,
+                     isMasterSheet, compareData, compareDataByDivision, perfCfg, error }) {
   if (loading) {
     return (
       <div className="loading-state">
@@ -606,8 +569,8 @@ function DataTable({ headers, rows, loading, viewMode, divFilter, progressColumn
     return (
       <div className="empty-state">
         <div className="empty-icon">📭</div>
-        <h4>Data not available</h4>
-        <p>This report tab may not exist in the Google Sheet, or the tab name in <code>config/reports.js</code> doesn&apos;t match exactly.</p>
+        <h4>{error ? 'Google Sheet configuration issue' : 'Data not available'}</h4>
+        <p>{error || 'This report tab may not exist in the Google Sheet, or the tab name in <code>config/reports.js</code> doesn&apos;t match exactly.'}</p>
       </div>
     );
   }
@@ -704,7 +667,7 @@ function DataTable({ headers, rows, loading, viewMode, divFilter, progressColumn
               // District rows: fuzzy-match by district name
               const excelRow = row.isTotal ? null
                 : row.isDivision && compareDataByDivision
-                  ? fuzzyMatchExcel(compareDataByDivision, distName.replace(/\s*division\s*$/i, '').trim())
+                  ? fuzzyMatchExcel(compareDataByDivision, distName.replace(/\s*division\s*/i, '').trim())
                   : (!row.isDivision && compareData)
                     ? fuzzyMatchExcel(compareData, distName)
                     : null;
@@ -753,13 +716,13 @@ function DataTable({ headers, rows, loading, viewMode, divFilter, progressColumn
                       if (excelVal !== undefined) {
                         const currNum = parseNumeric(cell);
                         if (!isNaN(currNum)) {
-                          // Normalize decimal % (Excel: 0.59) to match GSheet 0-100 scale (59.28).
+                          // Normalize decimal % (Excel: 0.59) to match GSheet 0–100 scale (59.28).
                           // Strict < 1 so a count of exactly 1 is never misread as 100% decimal.
                           const normExcel = (currNum > 1.5 && excelVal > 0 && excelVal < 1) ? excelVal * 100 : excelVal;
                           const diff = currNum - normExcel;
                           if (diff > 0.05) cmpArrow = <span className="cmp-up" title={`Excel: ${normExcel}`}>↑{formatDiff(diff)}</span>;
                           else if (diff < -0.05) cmpArrow = <span className="cmp-dn" title={`Excel: ${normExcel}`}>↓{formatDiff(Math.abs(diff))}</span>;
-                          else cmpArrow = <span className="cmp-eq" title={`Excel: ${normExcel}`}>↔ 0</span>;
+                          else cmpArrow = <span className="cmp-eq" title={`Excel: ${normExcel}`}>• 0</span>;
                         }
                       }
                     }
@@ -792,13 +755,23 @@ function DataTable({ headers, rows, loading, viewMode, divFilter, progressColumn
 }
 
 // — Sidebar
-function Sidebar({ active, onSelect, search, onSearch }) {
+function Sidebar({ active, onSelect, search, onSearch, onClose }) {
   const filtered = REPORTS.filter(r => r.name.toLowerCase().includes(search.toLowerCase()));
   const visibleGroups = REPORT_GROUPS.filter(g => filtered.some(r => r.group === g));
+  const navRef = useRef(null);
+  const activeRef = useRef(null);
+
+  useEffect(() => {
+    if (activeRef.current && navRef.current) {
+      activeRef.current.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'nearest' });
+    }
+  }, [active]);
+
   return (
     <>
       <div className="sidebar-top">
         <span className="sidebar-heading">Reports</span>
+        <button className="sidebar-close-btn" onClick={onClose} aria-label="Close menu">✕</button>
       </div>
       <input
         className="search-input"
@@ -806,15 +779,16 @@ function Sidebar({ active, onSelect, search, onSearch }) {
         value={search}
         onChange={e => onSearch(e.target.value)}
       />
-      <nav>
+      <nav ref={navRef}>
         {visibleGroups.map(group => (
           <div className="nav-group" key={group}>
             <div className="nav-group-title">{group}</div>
             {filtered.filter(r => r.group === group).map(r => (
               <button
                 key={r.id}
+                ref={active === r.name ? activeRef : null}
                 className={`nav-item${active === r.name ? ' active' : ''}`}
-                onClick={() => onSelect(r.name)}
+                onClick={() => { onSelect(r.name); if (onClose) onClose(); }}
               >
                 <span className="nav-icon">{r.icon}</span>
                 {r.name}
@@ -856,6 +830,7 @@ export default function Dashboard({ initialData, initialReport }) {
   const [tabConfigs, setTabConfigs] = useState({});
   const [showAdminMenu, setShowAdminMenu] = useState(false);
   const [showCfgPanel, setShowCfgPanel] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   const [cfgTabId, setCfgTabId] = useState('');
   const [cfgDraft, setCfgDraft] = useState({ column_name: '', good: 60, moderate: 25 });
 
@@ -895,7 +870,7 @@ export default function Dashboard({ initialData, initialReport }) {
       if (session?.user) { setSupaUser(session.user); checkIsAdmin(session.user.email); }
     });
     // Listen for sign-in / sign-out
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_evt, session) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       if (session?.user) { setSupaUser(session.user); checkIsAdmin(session.user.email); }
       else { setSupaUser(null); setIsAdmin(false); }
     });
@@ -1033,7 +1008,6 @@ export default function Dashboard({ initialData, initialReport }) {
 
   // Performance threshold config + column override
   const [perfCfg, setPerfCfg] = useState({ critBelow: 25, goodAbove: 60 });
-  const [showPerfCfg, setShowPerfCfg] = useState(false);
   const [perfColOverride, setPerfColOverride] = useState(null); // null = auto-detect
 
   const skipFirstFetch = useRef(Boolean(initialData));
@@ -1061,17 +1035,6 @@ export default function Dashboard({ initialData, initialReport }) {
   }, [headersKey, activeConfig.id, tabConfigs]);
 
   // All selectable numeric columns for the perf card (excludes S.No and name col)
-  const perfColOptions = useMemo(() => {
-    if (!data?.headers) return [];
-    const nameRe = /^(district|districts|division|location|block|name|zila)$/i;
-    return data.headers
-      .map((h, idx) => ({ label: h, idx }))
-      .filter(({ label }) => {
-        const t = (label || '').trim();
-        return t && !CLIENT_SNO_RE.test(t) && !nameRe.test(t);
-      });
-  }, [data?.headers]);
-
   // When a column override is selected, rebuild progressData client-side
   const effectivePerfData = useMemo(() => {
     if (perfColOverride === null || !data?.rows || !data?.headers) {
@@ -1113,12 +1076,12 @@ export default function Dashboard({ initialData, initialReport }) {
     };
   }, [compareFiles, activeCompare, activeReport]);
 
-  const compareData = compareEntry?.data ?? null;     // district rows lookup
+  const compareData = compareEntry?.data ?? null; // district rows lookup
   const compareTotals = compareEntry?.totals ?? null; // column totals for KPI cards
 
   // Aggregate Excel district data into division totals so Division view can compare.
   // Percentage columns (all per-district values ≤ 1) are averaged, not summed,
-  // so the decimal-percent normalization (×100) still applies at compare time.
+  // so the decimal→percent normalization (×100) still applies at compare time.
   const compareDataByDivision = useMemo(() => {
     if (!compareData) return null;
     // Phase 1: accumulate sums + track whether every district value is a decimal (≤ 1)
@@ -1208,7 +1171,7 @@ export default function Dashboard({ initialData, initialReport }) {
           ? XLSX.read(new TextDecoder().decode(buf), { type: 'string' })
           : XLSX.read(new Uint8Array(buf), { type: 'array' });
 
-        // Parse every sheet; store as { sheetName: { data, totals, hdrsLower, count } }
+        // Parse every sheet; store as { sheetName → { data, totals, hdrsLower, count } }
         const sheets = {};
         for (const sName of wb.SheetNames) {
           const rows = XLSX.utils.sheet_to_json(wb.Sheets[sName], { header: 1, defval: '' });
@@ -1242,7 +1205,7 @@ export default function Dashboard({ initialData, initialReport }) {
     const ok = results.filter(r => r.ok);
     const bad = results.filter(r => !r.ok);
     if (ok.length && !bad.length) {
-      setCompareStatus({ type: 'success', msg: `✓ Loaded: ${ok.map(r => `${r.name} — ${r.sheetCount} sheet(s) found: ${r.sheetNames.join(', ')}`).join('; ')}` });
+      setCompareStatus({ type: 'success', msg: `✓ Loaded: ${ok.map(r => `${r.name} — ${r.sheetCount} sheet(s) found: ${r.sheetNames.join(' | ')}`).join('; ')}` });
     } else if (ok.length) {
       setCompareStatus({ type: 'warn', msg: `Loaded ${ok.length} file(s). Failed: ${bad.map(r => `${r.name} — ${r.msg}`).join('; ')}` });
     } else {
@@ -1266,8 +1229,9 @@ export default function Dashboard({ initialData, initialReport }) {
       </Head>
 
       <header className="topbar">
+        <button className="btn-hamburger" onClick={() => setSidebarOpen(v => !v)} aria-label="Open menu">☰</button>
         <div className="brand">
-          <img className="brand-emblem" src="/logo.svg" alt="" />
+          <img className="brand-emblem" src="/logo.svg" alt="Punjab Cooperative Department logo" />
           <div>
             <h1 className="brand-title">
               Cooperative Department<span className="brand-sep"> | </span>State-Level Review
@@ -1275,6 +1239,7 @@ export default function Dashboard({ initialData, initialReport }) {
             <p className="brand-sub">Live monitoring · 17 reports · Government of Punjab</p>
           </div>
         </div>
+        <span className="topbar-active-report">{activeReport}</span>
         <div className="topbar-right">
           <div className="sync-status">
             <span className="sync-dot" />
@@ -1308,7 +1273,7 @@ export default function Dashboard({ initialData, initialReport }) {
                     ⚙ Configure tab
                   </button>
                   <button className="admin-dropdown-item admin-dropdown-item-out" onClick={handleLogout}>
-                    ↩ Sign out
+                    🚪 Sign out
                   </button>
                 </div>
               )}
@@ -1337,7 +1302,7 @@ export default function Dashboard({ initialData, initialReport }) {
                 <button className="btn-primary" type="submit" disabled={loginLoading}>
                   {loginLoading ? 'Signing in…' : 'Sign in'}
                 </button>
-                <button className="btn btn-ghost" type="button" onClick={() => setLoginOpen(false)}>Cancel</button>
+                <button className="btn-ghost" type="button" onClick={() => setLoginOpen(false)}>Cancel</button>
               </div>
             </form>
           </div>
@@ -1398,9 +1363,11 @@ export default function Dashboard({ initialData, initialReport }) {
         )}
       </header>
 
+      {sidebarOpen && <div className="sidebar-overlay" onClick={() => setSidebarOpen(false)} />}
       <div className="shell">
-        <aside className="sidebar">
-          <Sidebar active={activeReport} onSelect={setActiveReport} search={search} onSearch={setSearch} />
+        <aside className={`sidebar${sidebarOpen ? ' sidebar-open' : ''}`}>
+          <Sidebar active={activeReport} onSelect={setActiveReport} search={search}
+            onSearch={setSearch} onClose={() => setSidebarOpen(false)} />
         </aside>
 
         <main className="main-content">
@@ -1417,18 +1384,19 @@ export default function Dashboard({ initialData, initialReport }) {
             loading={loading}
             compareTotals={compareTotals}
           />
+
           <PerformanceCard
             progressData={effectivePerfData}
             progressColumn={effectivePerfColumn}
             loading={loading}
             perfCfg={perfCfg}
-            setPerfCfg={setPerfCfg}
-            showCfg={showPerfCfg}
-            setShowCfg={setShowPerfCfg}
-            colOptions={perfColOptions}
-            selectedColIdx={perfColOverride}
-            onColChange={setPerfColOverride}
-            autoColHeader={data?.progressColumn?.colHeader || 'none'}
+            isAdmin={isAdmin}
+            onOpenCfg={() => {
+              const existing = tabConfigs[activeConfig.id];
+              setCfgTabId(activeConfig.id);
+              setCfgDraft({ column_name: existing?.column_name || '', good: existing?.good ?? 60, moderate: existing?.moderate ?? 25 });
+              setShowCfgPanel(true);
+            }}
           />
 
           <section className="data-panel">
@@ -1445,7 +1413,7 @@ export default function Dashboard({ initialData, initialReport }) {
                 onViewMode={m => { setViewMode(m); setDivFilter('all'); }}
                 divFilter={divFilter}
                 onDivFilter={setDivFilter}
-                hasData={Boolean(data?.headers?.length)}
+                hasData={Boolean(data?.headers.length)}
                 isMasterSheet={data?.isMasterSheet}
                 onCSV={() => downloadCSV(data.headers, data.rows, `${activeReport.replace(/[^a-z0-9]+/gi, '_')}.csv`)}
                 compareFiles={compareFiles}
@@ -1484,6 +1452,7 @@ export default function Dashboard({ initialData, initialReport }) {
               compareData={compareData}
               compareDataByDivision={compareDataByDivision}
               perfCfg={perfCfg}
+              error={data?.error}
             />
 
             <div className="data-panel-footer">
