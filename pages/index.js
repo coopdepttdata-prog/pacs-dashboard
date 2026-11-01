@@ -381,9 +381,14 @@ function clientFindNameColIdx(headers) {
 }
 
 // — Performance card — compact + configurable
-function clientClassify(rawValue, critBelow, goodAbove) {
+function clientClassify(rawValue, critBelow, goodAbove, lowerIsBetter = false) {
   const n = parseFloat(String(rawValue || '').replace(/[₹,\s]/g, ''));
   if (isNaN(n)) return 'neutral';
+  if (lowerIsBetter) {
+    if (n <= goodAbove) return 'good';
+    if (n <= critBelow) return 'moderate';
+    return 'bad';
+  }
   if (n >= goodAbove) return 'good';
   if (n >= critBelow) return 'moderate';
   return 'bad';
@@ -396,11 +401,11 @@ function PerformanceCard({
   if (loading) return null;
   if (!progressData?.length) return null;
 
-  const { critBelow, goodAbove } = perfCfg;
+  const { critBelow, goodAbove, lowerIsBetter = false } = perfCfg;
 
   const groups = { bad: [], moderate: [], good: [] };
   for (const item of (progressData || [])) {
-    const status = clientClassify(item.value, critBelow, goodAbove);
+    const status = clientClassify(item.value, critBelow, goodAbove, lowerIsBetter);
     if (status in groups) groups[status].push(item);
   }
 
@@ -412,9 +417,19 @@ function PerformanceCard({
         <span className="perf-card-icon">📊</span>
         <span className="perf-metric-name">{metricName}</span>
         <div className="perf-threshold-badges">
-          <span className="pthr pthr-bad">Critical &lt;{critBelow}</span>
-          <span className="pthr pthr-mod">Moderate {critBelow}–{goodAbove}</span>
-          <span className="pthr pthr-good">Good &gt;{goodAbove}</span>
+          {lowerIsBetter ? (
+            <>
+              <span className="pthr pthr-bad">Critical &gt;{critBelow}</span>
+              <span className="pthr pthr-mod">Moderate {goodAbove + 1}–{critBelow}</span>
+              <span className="pthr pthr-good">Good ≤{goodAbove}</span>
+            </>
+          ) : (
+            <>
+              <span className="pthr pthr-bad">Critical &lt;{critBelow}</span>
+              <span className="pthr pthr-mod">Moderate {critBelow}–{goodAbove}</span>
+              <span className="pthr pthr-good">Good &gt;{goodAbove}</span>
+            </>
+          )}
         </div>
         {isAdmin && (
           <button className="perf-cfg-btn" onClick={onOpenCfg}>
@@ -540,11 +555,21 @@ function progressCls(row, progressColIdx, perfCfg) {
     if (v.includes('↓') || v.includes('poor')) return 'prog-bad';
     return '';
   }
-  const { critBelow, goodAbove } = perfCfg;
+  const { critBelow, goodAbove, lowerIsBetter = false } = perfCfg;
   const isPercent = raw.includes('%') || (num >= 0 && num <= 100);
   if (isPercent) {
+    if (lowerIsBetter) {
+      if (num <= goodAbove) return 'prog-good';
+      if (num <= critBelow) return 'prog-mod';
+      return 'prog-bad';
+    }
     if (num >= goodAbove) return 'prog-good';
     if (num >= critBelow) return 'prog-mod';
+    return 'prog-bad';
+  }
+  if (lowerIsBetter) {
+    if (num <= goodAbove) return 'prog-good';
+    if (num <= critBelow) return 'prog-mod';
     return 'prog-bad';
   }
   if (num > 0) return 'prog-good';
@@ -826,13 +851,13 @@ export default function Dashboard({ initialData, initialReport }) {
   const [loginLoading, setLoginLoading] = useState(false);
   const [savingCloud, setSavingCloud] = useState(false);
 
-  // Per-tab config (column_name + thresholds) — loaded from Supabase, editable by admin
+  // Per-tab config (column_name + thresholds + sort direction) — loaded from Supabase, editable by admin
   const [tabConfigs, setTabConfigs] = useState({});
   const [showAdminMenu, setShowAdminMenu] = useState(false);
   const [showCfgPanel, setShowCfgPanel] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [cfgTabId, setCfgTabId] = useState('');
-  const [cfgDraft, setCfgDraft] = useState({ column_name: '', good: 60, moderate: 25 });
+  const [cfgDraft, setCfgDraft] = useState({ column_name: '', good: 60, moderate: 25, lower_is_better: false });
 
   // Restore comparison state from sessionStorage after hydration.
   // Uses versioned keys (v2) so old-format data (pre-multi-sheet refactor) is ignored.
@@ -924,10 +949,12 @@ export default function Dashboard({ initialData, initialReport }) {
       for (const row of data) {
         if (row.key?.startsWith('tab:')) {
           const tabId = row.key.slice(4);
+          const value = row.value || {};
           configs[tabId] = {
             column_name: row.column_name || '',
-            good: row.value?.good ?? 60,
-            moderate: row.value?.moderate ?? 25,
+            good: Number(value.good ?? 60),
+            moderate: Number(value.moderate ?? 25),
+            lower_is_better: Boolean(value.lower_is_better),
           };
         }
       }
@@ -974,17 +1001,27 @@ export default function Dashboard({ initialData, initialReport }) {
 
   async function saveTabConfig(tabId, draft) {
     try {
+      const payload = {
+        good: Number(draft.good),
+        moderate: Number(draft.moderate),
+        lower_is_better: Boolean(draft.lower_is_better),
+      };
       await supabase.from('dashboard_config').upsert({
         key: `tab:${tabId}`,
         column_name: draft.column_name || null,
-        value: { good: draft.good, moderate: draft.moderate },
+        value: payload,
         updated_by: supaUser?.email || '',
         updated_at: new Date().toISOString(),
       }, { onConflict: 'key' });
-      const entry = { column_name: draft.column_name || '', good: draft.good, moderate: draft.moderate };
+      const entry = {
+        column_name: draft.column_name || '',
+        good: Number(draft.good),
+        moderate: Number(draft.moderate),
+        lower_is_better: Boolean(draft.lower_is_better),
+      };
       setTabConfigs(prev => ({ ...prev, [tabId]: entry }));
       if (tabId === activeConfig.id) {
-        setPerfCfg({ critBelow: draft.moderate, goodAbove: draft.good });
+        setPerfCfg({ critBelow: Number(draft.moderate), goodAbove: Number(draft.good), lowerIsBetter: Boolean(draft.lower_is_better) });
       }
       setShowCfgPanel(false);
     } catch (err) {
@@ -1007,7 +1044,7 @@ export default function Dashboard({ initialData, initialReport }) {
   }
 
   // Performance threshold config + column override
-  const [perfCfg, setPerfCfg] = useState({ critBelow: 25, goodAbove: 60 });
+  const [perfCfg, setPerfCfg] = useState({ critBelow: 25, goodAbove: 60, lowerIsBetter: false });
   const [perfColOverride, setPerfColOverride] = useState(null); // null = auto-detect
 
   const skipFirstFetch = useRef(Boolean(initialData));
@@ -1016,7 +1053,7 @@ export default function Dashboard({ initialData, initialReport }) {
   // Sync perfCfg thresholds whenever the active tab or cloud configs change
   useEffect(() => {
     const cfg = tabConfigs[activeConfig.id];
-    if (cfg) setPerfCfg({ critBelow: cfg.moderate ?? 25, goodAbove: cfg.good ?? 60 });
+    if (cfg) setPerfCfg({ critBelow: Number(cfg.moderate ?? 25), goodAbove: Number(cfg.good ?? 60), lowerIsBetter: Boolean(cfg.lower_is_better) });
   }, [activeConfig.id, tabConfigs]);
 
   // Sync perfColOverride by name when data loads for the active tab.
@@ -1220,6 +1257,19 @@ export default function Dashboard({ initialData, initialReport }) {
     if (divFilter === 'all') return districtRows.length;
     return districtRows.filter(r => (r.division || getDivisionOf(r.cells?.[0] || r.cells?.[1] || '')) === divFilter).length;
   }, [viewMode, divFilter, districtRows]);
+  const selectableColumns = useMemo(() => {
+    if (!data?.headers?.length) return [];
+    const nameColIdx = clientFindNameColIdx(data.headers);
+    return data.headers
+      .map((header, idx) => ({ header, idx }))
+      .filter(({ header, idx }) => {
+        if (idx === nameColIdx) return false;
+        if (idx !== nameColIdx && /^(s\.??no\.?|sr\.??no\.?|serial|#)$/i.test((header || '').trim())) return false;
+        if (!header || !header.trim()) return false;
+        return true;
+      })
+      .map(({ header, idx }) => ({ label: header, value: String(idx) }));
+  }, [data?.headers]);
 
   return (
     <>
@@ -1267,7 +1317,12 @@ export default function Dashboard({ initialData, initialReport }) {
                   <button className="admin-dropdown-item" onClick={() => {
                     const existing = tabConfigs[activeConfig.id];
                     setCfgTabId(activeConfig.id);
-                    setCfgDraft({ column_name: existing?.column_name || '', good: existing?.good ?? 60, moderate: existing?.moderate ?? 25 });
+                    setCfgDraft({
+                      column_name: existing?.column_name || '',
+                      good: existing?.good ?? 60,
+                      moderate: existing?.moderate ?? 25,
+                      lower_is_better: Boolean(existing?.lower_is_better),
+                    });
                     setShowCfgPanel(true);
                   }}>
                     ⚙ Configure tab
@@ -1320,7 +1375,12 @@ export default function Dashboard({ initialData, initialReport }) {
                 const id = e.target.value;
                 setCfgTabId(id);
                 const ex = tabConfigs[id];
-                setCfgDraft({ column_name: ex?.column_name || '', good: ex?.good ?? 60, moderate: ex?.moderate ?? 25 });
+                setCfgDraft({
+                  column_name: ex?.column_name || '',
+                  good: ex?.good ?? 60,
+                  moderate: ex?.moderate ?? 25,
+                  lower_is_better: Boolean(ex?.lower_is_better),
+                });
               }}>
                 {REPORTS.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
               </select>
@@ -1328,33 +1388,53 @@ export default function Dashboard({ initialData, initialReport }) {
 
             {/* Column Name */}
             <div className="cfg-row">
-              <label className="cfg-label">Performance column name</label>
-              <input className="cfg-input" type="text" placeholder="e.g. percentage total"
-                value={cfgDraft.column_name}
-                onChange={e => setCfgDraft(d => ({ ...d, column_name: e.target.value }))} />
+              <label className="cfg-label">Performance column</label>
+              <select className="cfg-input" value={cfgDraft.column_name} onChange={e => setCfgDraft(d => ({ ...d, column_name: e.target.value }))}>
+                <option value="">Auto-detect</option>
+                {selectableColumns.map(col => (
+                  <option key={col.value} value={col.label}>{col.label}</option>
+                ))}
+              </select>
+            </div>
+
+            <div className="cfg-row" style={{ alignItems: 'center' }}>
+              <label className="cfg-label" htmlFor="lower-is-better">Lower values are better</label>
+              <input
+                id="lower-is-better"
+                type="checkbox"
+                checked={Boolean(cfgDraft.lower_is_better)}
+                onChange={e => setCfgDraft(d => ({ ...d, lower_is_better: e.target.checked }))}
+                style={{ width: 18, height: 18 }}
+              />
             </div>
 
             {/* Thresholds */}
             <div className="cfg-row">
-              <label className="cfg-label">Good threshold (≥ this % = Good)</label>
+              <label className="cfg-label">Good threshold ({cfgDraft.lower_is_better ? '≤ this % = Good' : '≥ this % = Good'})</label>
               <input className="cfg-input" type="number" min="1" max="100"
                 value={cfgDraft.good}
                 onChange={e => setCfgDraft(d => ({ ...d, good: Number(e.target.value) }))} />
             </div>
             <div className="cfg-row">
-              <label className="cfg-label">Moderate threshold (≥ this % = Moderate, below = Critical)</label>
+              <label className="cfg-label">Moderate threshold ({cfgDraft.lower_is_better ? '≤ this % = Moderate, above = Critical' : '≥ this % = Moderate, below = Critical'})</label>
               <input className="cfg-input" type="number" min="1" max="100"
                 value={cfgDraft.moderate}
                 onChange={e => setCfgDraft(d => ({ ...d, moderate: Number(e.target.value) }))} />
             </div>
             <p className="cfg-hint">
-              Critical &lt;{cfgDraft.moderate}% · Moderate {cfgDraft.moderate}–{cfgDraft.good - 1}% · Good ≥{cfgDraft.good}%
+              {cfgDraft.lower_is_better
+                ? `Critical >${cfgDraft.moderate}% · Moderate ${cfgDraft.good + 1}–${cfgDraft.moderate}% · Good ≤${cfgDraft.good}%`
+                : `Critical <${cfgDraft.moderate}% · Moderate ${cfgDraft.moderate}–${cfgDraft.good - 1}% · Good ≥${cfgDraft.good}%`}
             </p>
-            {cfgDraft.moderate >= cfgDraft.good && (
-              <p className="cfg-hint" style={{ color: '#c74343' }}>⚠ Moderate threshold must be less than Good threshold.</p>
+            {(cfgDraft.lower_is_better ? cfgDraft.good >= cfgDraft.moderate : cfgDraft.moderate >= cfgDraft.good) && (
+              <p className="cfg-hint" style={{ color: '#c74343' }}>
+                {cfgDraft.lower_is_better
+                  ? '⚠ For lower-is-better metrics, Moderate threshold must be greater than Good threshold.'
+                  : '⚠ Moderate threshold must be less than Good threshold.'}
+              </p>
             )}
             <div className="cfg-actions">
-              <button className="btn" disabled={cfgDraft.moderate >= cfgDraft.good}
+              <button className="btn" disabled={cfgDraft.lower_is_better ? cfgDraft.good >= cfgDraft.moderate : cfgDraft.moderate >= cfgDraft.good}
                 onClick={() => saveTabConfig(cfgTabId, cfgDraft)}>Save &amp; publish</button>
               <button className="btn btn-ghost" onClick={() => setShowCfgPanel(false)}>Cancel</button>
             </div>
@@ -1394,7 +1474,12 @@ export default function Dashboard({ initialData, initialReport }) {
             onOpenCfg={() => {
               const existing = tabConfigs[activeConfig.id];
               setCfgTabId(activeConfig.id);
-              setCfgDraft({ column_name: existing?.column_name || '', good: existing?.good ?? 60, moderate: existing?.moderate ?? 25 });
+              setCfgDraft({
+                column_name: existing?.column_name || '',
+                good: existing?.good ?? 60,
+                moderate: existing?.moderate ?? 25,
+                lower_is_better: Boolean(existing?.lower_is_better),
+              });
               setShowCfgPanel(true);
             }}
           />
