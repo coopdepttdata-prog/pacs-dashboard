@@ -5,8 +5,25 @@ import { REPORTS, REPORT_GROUPS } from '../config/reports';
 import { DIVISIONS, DIVISION_NAMES, getDivisionForDistrict } from '../config/divisions';
 import { supabase } from '../lib/supabase';
 
-const DEFAULT_REPORT = REPORTS[1];
+const DEFAULT_REPORT = REPORTS[0];
+const DASHBOARD_TITLE = 'State Level Meeting Dashboard - Punjab Cooperative Department';
+const DASHBOARD_DESCRIPTION = 'State-level dashboard for PACS reporting, monitoring, and performance review.';
 const REFRESH_MS = 5 * 60 * 1000;
+
+function getReportFromQuery(search = '') {
+  if (typeof window === 'undefined' && !search) return DEFAULT_REPORT.name;
+  const params = new URLSearchParams(search || (typeof window !== 'undefined' ? window.location.search : ''));
+  const raw = params.get('tab') || params.get('report');
+  if (!raw) return DEFAULT_REPORT.name;
+
+  const normalized = decodeURIComponent(raw).trim().toLowerCase();
+  const match = REPORTS.find(report => {
+    const values = [report.id, report.name, report.tabName];
+    return values.some(value => value && value.toLowerCase() === normalized)
+      || values.some(value => value && value.toLowerCase().replace(/[^a-z0-9]+/g, '-') === normalized);
+  });
+  return match?.name || DEFAULT_REPORT.name;
+}
 
 const CARD_COLORS = [
   '#2876c7', '#159b9a', '#d48a20', '#8056c9', '#0ea86a', '#3d93e5',
@@ -830,6 +847,7 @@ function Sidebar({ active, onSelect, search, onSearch, onClose }) {
 export default function Dashboard({ initialData, initialReport }) {
   const [activeReport, setActiveReport] = useState(initialReport || DEFAULT_REPORT.name);
   const [data, setData] = useState(initialData || null);
+  const [hasMounted, setHasMounted] = useState(false);
   const [loading, setLoading] = useState(!initialData);
   const [viewMode, setViewMode] = useState('district');
   const [divFilter, setDivFilter] = useState('all');
@@ -858,6 +876,30 @@ export default function Dashboard({ initialData, initialReport }) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [cfgTabId, setCfgTabId] = useState('');
   const [cfgDraft, setCfgDraft] = useState({ column_name: '', good: 60, moderate: 25, lower_is_better: false });
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    setHasMounted(true);
+    const fromQuery = getReportFromQuery(window.location.search);
+    if (fromQuery && fromQuery !== activeReport) setActiveReport(fromQuery);
+  }, []);
+
+  useEffect(() => {
+    if (!hasMounted || typeof window === 'undefined') return;
+    const report = REPORTS.find(r => r.name === activeReport) || DEFAULT_REPORT;
+    const url = new URL(window.location.href);
+
+    if (report.id === DEFAULT_REPORT.id) {
+      url.searchParams.delete('tab');
+    } else {
+      url.searchParams.set('tab', report.id);
+    }
+
+    const nextUrl = `${url.pathname}${url.search}`;
+    if (window.location.pathname + window.location.search !== nextUrl) {
+      window.history.replaceState({}, '', nextUrl);
+    }
+  }, [activeReport, hasMounted]);
 
   // Restore comparison state from sessionStorage after hydration.
   // Uses versioned keys (v2) so old-format data (pre-multi-sheet refactor) is ignored.
@@ -1274,8 +1316,17 @@ export default function Dashboard({ initialData, initialReport }) {
   return (
     <>
       <Head>
-        <title>{`${activeReport} · Punjab Cooperative Department`}</title>
+        <title>{DASHBOARD_TITLE}</title>
         <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <meta name="title" content={DASHBOARD_TITLE} />
+        <meta name="description" content={DASHBOARD_DESCRIPTION} />
+        <meta property="og:title" content={DASHBOARD_TITLE} />
+        <meta property="og:description" content={DASHBOARD_DESCRIPTION} />
+        <meta property="og:type" content="website" />
+        <meta property="og:site_name" content="Punjab Cooperative Department" />
+        <meta name="twitter:card" content="summary_large_image" />
+        <meta name="twitter:title" content={DASHBOARD_TITLE} />
+        <meta name="twitter:description" content={DASHBOARD_DESCRIPTION} />
       </Head>
 
       <header className="topbar">
